@@ -1,0 +1,6 @@
+[submodule "computer_enhance"]
+	path = computer_enhance
+	url = git@github.com:cmuratori/computer_enhance.git
+[submodule "red-master"]
+	path = red-master
+	url = git@github.com:red/red.git
