@@ -55,6 +55,7 @@ decode-exe: routine [
         byte1: cur/1
         case [
             not (byte1 >> 2 xor b00'100010) = b00'111111 [
+                ; Figure out the data
                 direction: as-logic byte1 and b000000'10
                 width: as-logic byte1 and b000000'01
                 if debug? [print-line ["direction " direction " width " width]]
@@ -63,14 +64,17 @@ decode-exe: routine [
                 mode: byte2 and b11'000'000 >> 6 ; now only b11
                 reg: byte2 and b00'111'000 >> 3
                 r_m: byte2 and b00'000'111
-                ; print-line ["mode " string/to-hex as-integer mode true " reg " string/to-hex as-integer reg true " r_m " string/to-hex as-integer r_m true] ; hex doesn't work 
                 if debug? [print-line ["mode " as-integer mode " reg " as-integer reg " r_m " as-integer r_m]]
+                ; print-line ["mode " string/to-hex as-integer mode true " reg " string/to-hex as-integer reg true " r_m " string/to-hex as-integer r_m true] ; hex doesn't work 
 
+                ; Output the asm
                 inst-reg-start: (as-integer width) * inst-row-length
                 string/concatenate-literal out-asm "mov "
+
                 inst-reg-index: inst-reg-start + r_m + 1
                 string/concatenate-literal out-asm as-c-string inst-reg/inst-reg-index
                 string/concatenate-literal out-asm ", "
+
                 inst-reg-index: inst-reg-start + reg + 1
                 string/concatenate-literal out-asm as-c-string inst-reg/inst-reg-index
                 string/append-char GET_BUFFER(out-asm) as-integer lf
