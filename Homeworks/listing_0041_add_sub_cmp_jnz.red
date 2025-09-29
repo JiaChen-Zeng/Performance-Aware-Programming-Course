@@ -61,6 +61,24 @@ print-bin: func [
     inst-mem: [
         "bx + si" "bx + di" "bp + si" "bp + di" "si" "di" "bp" "bx"
     ]
+
+    extract-bits: func [
+        byte [byte!]
+        pos-start [integer!] ; Count from the lower bits. 0 based index.
+        len [integer!]
+        return: [byte!]
+    ] [
+        return byte and (#"^(FF)" >>> (8 - len) << pos-start) >>> pos-start
+    ]
+
+    decode-reg: func [
+        byte [byte!] pos-start [integer!] width [logic!]
+        return: [c-string!]
+        /local index [integer!]
+    ] [
+        index: (as-integer width) * inst-row-length + (extract-bits byte pos-start 3) + 1
+        return as-c-string inst-reg/index
+    ]
 ]
 
 decode-exe: routine [
@@ -107,9 +125,11 @@ decode-exe: routine [
             ; print-line ["mode " string/to-hex as-integer mode true " reg " string/to-hex as-integer reg true " r_m " string/to-hex as-integer r_m true] ; hex doesn't work 
             cur: cur + 2
 
-            ; Decode right
-            index: (as-integer width) * inst-row-length + reg + 1
-            output-cstr: as-c-string inst-reg/index
+            ; Decode reg
+            ; TODO: replace reg and refactor function for other data decode
+            output-cstr: decode-reg byte2 3 width
+            ; index: (as-integer width) * inst-row-length + reg + 1
+            ; output-cstr: as-c-string inst-reg/index
 
             ; Decode 
             switch mode [
@@ -182,10 +202,11 @@ decode-exe: routine [
 
         ; Immediate to register/memory 
         if byte1 = OP_ADD_SUB_CMP_IR [
-            output-cstr: switch byte1 [
-                OP_ADD_IR ["add "]
-                OP_SUB_IR ["sub "]
-                OP_CMP_IR ["cmp "]
+            byte2: cur/2 and #"^(1C)" >>> 2
+            output-cstr: switch byte2 [
+                OP_ADD_SUB_CMP_IR_ADD ["add "]
+                OP_ADD_SUB_CMP_IR_SUB ["sub "]
+                OP_ADD_SUB_CMP_IR_CMP ["cmp "]
                 default [null]
             ]
             either output-cstr <> null [
@@ -237,8 +258,8 @@ decode-exe: routine [
 
 ; ====================================================
 
-; bin: read/binary %../computer_enhance/perfaware/part1/listing_0039_more_movs
-bin: read/binary %../computer_enhance/perfaware/part1/listing_0041_add_sub_cmp_jnz
+bin: read/binary %../computer_enhance/perfaware/part1/listing_0039_more_movs
+; bin: read/binary %../computer_enhance/perfaware/part1/listing_0041_add_sub_cmp_jnz
 print-bin bin
 if debug? [print "====================="]
 
