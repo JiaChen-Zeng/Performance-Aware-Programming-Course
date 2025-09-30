@@ -62,6 +62,14 @@ print-bin: func [
         "bx + si" "bx + di" "bp + si" "bp + di" "si" "di" "bp" "bx"
     ]
 
+    extract-bit: func [
+        byte [byte!]
+        pos [integer!] ; Count from the lower bits. 0 based index.
+        return: [logic!]
+    ] [
+        return as-logic (byte and (#"^(01)" << pos))
+    ]
+
     extract-bits: func [
         byte [byte!]
         pos-start [integer!] ; Count from the lower bits. 0 based index.
@@ -69,6 +77,21 @@ print-bin: func [
         return: [byte!]
     ] [
         return byte and (#"^(FF)" >>> (8 - len) << pos-start) >>> pos-start
+    ]
+
+    decode-r_m: func [
+        byte [byte!]
+        pos-start [integer!] ; Count from the lower bits. 0 based index.
+        disp [byte-ptr!] ; Pointer at the 1st byte address of the displacement
+        in-out-cur [pointer! [byte-ptr!]]
+        out-r_m [c-string!] ; Need enough size pre-allocated
+        /local r_m-len [integer!]
+    ] [
+        r_m-len: 0
+        ; TODO
+
+        r_m-len: r_m-len + 1
+        out-r_m/r_m-len: #"^(00)"
     ]
 
     decode-reg: func [
@@ -79,6 +102,15 @@ print-bin: func [
         index: (as-integer width) * inst-row-length + (extract-bits byte pos-start 3) + 1
         return as-c-string inst-reg/index
     ]
+
+    decode-mode: func [
+        byte [byte!] pos-start [integer!]
+        return: [byte!]
+    ] [
+        return extract-bits byte pos-start 2
+    ]
+    
+    decode-str: as-c-string allocate 20
 ]
 
 decode-exe: routine [
@@ -112,13 +144,14 @@ decode-exe: routine [
             output-str: string/rs-make-at stack/push* 20
             ; Extract byte1
             byte1: cur/1
-            direction: as-logic byte1 and b000000'10
-            width: as-logic byte1 and b000000'01
+            width: extract-bit byte1 0
+            direction: extract-bit byte1 1
             if debug? [print-line ["direction " direction " width " width]]
 
             ; Extract byte2
             byte2: cur/2
-            mode: byte2 and b11'000'000 >>> 6
+            mode: decode-mode byte2 6
+            ; mode: byte2 and b11'000'000 >>> 6
             reg: byte2 and b00'111'000 >>> 3
             r_m: byte2 and b00'000'111
             if debug? [print-line ["mode " as-integer mode " reg " as-integer reg " r_m " as-integer r_m]]
