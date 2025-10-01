@@ -82,13 +82,73 @@ print-bin: func [
     decode-r_m: func [
         byte [byte!]
         pos-start [integer!] ; Count from the lower bits. 0 based index.
-        disp [byte-ptr!] ; Pointer at the 1st byte address of the displacement
-        in-out-cur [pointer! [byte-ptr!]]
+        width [logic!] mode [byte!]
+        disp [byte-ptr!] ; Pointer at the 1st byte address of displacement
+        out-inc [int-ptr!]
         out-r_m [c-string!] ; Need enough size pre-allocated
-        /local r_m-len [integer!]
+        /local r_m [byte!] r_m-len [integer!] index [integer!] str-len [integer!] str-len2 [integer!] str [c-string!] int [integer!]
     ] [
-        r_m-len: 0
-        ; TODO
+        switch mode [
+            #"^(03)" [
+                copy-memory as byte-ptr! out-r_m as byte-ptr! decode-reg byte pos-start width 2
+                r_m-len: 2
+                out-inc/value: 0
+            ]
+            #"^(00)" [
+                r_m: extract-bits byte pos-start 3
+                either r_m <> #"^(06)" [
+                    either r_m < #"^(04)" [ ; ex. [bx + si]
+                        out-r_m/1: #"["
+                        
+                        index: as-integer r_m + 1
+                        copy-memory as byte-ptr! (out-r_m + 1) as byte-ptr! inst-mem/index 7 ; len of "bx + si"
+
+                        out-r_m/9: #"]" ; len(7) + 2
+                        r_m-len: 9
+                        out-inc/value: 0
+                    ] [ ; ex. si
+                        index: as-integer r_m + 1
+                        copy-memory as byte-ptr! out-r_m as byte-ptr! inst-mem/index 2
+                        r_m-len: 2
+                        out-inc/value: 0
+                    ]
+                ] [ ; Direct address
+                    str: integer/form-signed decode-int16 disp
+                    r_m-len: length? str
+                    copy-memory as byte-ptr! out-r_m as byte-ptr! str r_m-len
+                    out-inc/value: 2
+                ]
+            ]
+            default [ ; 1 or 2 only. 
+                r_m: extract-bits byte pos-start 3
+                out-r_m/1: #"["
+
+                index: as-integer r_m + 1
+                str: as-c-string inst-mem/index
+                str-len: length? str
+                copy-memory as byte-ptr! (out-r_m + 1) as byte-ptr! str str-len
+
+                either mode = #"^(01)" [
+                    int: decode-int8 disp
+                    out-inc/value: 1
+                ] [
+                    int: decode-int16 disp
+                    out-inc/value: 2
+                ] ; Exception not handled
+
+                either int <> 0 [
+                    copy-memory as byte-ptr! (out-r_m + str-len + 1) as byte-ptr! " + " 3
+
+                    str: integer/form-signed int
+                    str-len2: length? str
+                    copy-memory as byte-ptr! (out-r_m + str-len + 4) as byte-ptr! str str-len2
+                    r_m-len: str-len + 5 + str-len2
+                ] [
+                    r_m-len: str-len + 2
+                ]
+                out-r_m/r_m-len: #"]"
+            ]
+        ]
 
         r_m-len: r_m-len + 1
         out-r_m/r_m-len: #"^(00)"
@@ -109,14 +169,28 @@ print-bin: func [
     ] [
         return extract-bits byte pos-start 2
     ]
-    
+
+    decode-int16: func [
+        p [byte-ptr!] ; 1st byte = low byte, 2nd byte = high byte
+        return: [integer!]
+    ] [
+        return (as-integer p/1) + ((as-integer p/2) << 8)
+    ]
+
+    decode-int8: func [
+        p [byte-ptr!]
+        return: [integer!]
+    ] [
+        return as-integer p/value
+    ]
+
     decode-str: as-c-string allocate 20
 ]
 
 decode-exe: routine [
     bin [binary!] out-asm [string!]
 
-    /local ser [series!] cur [byte-ptr!]
+    /local ser [series!] cur [byte-ptr!] inc [integer!]
     byte1 [byte!] byte2 [byte!]
     
     direction [logic!] width [logic!] mode [byte!] reg [byte!] r_m [byte!]
@@ -155,76 +229,28 @@ decode-exe: routine [
             reg: byte2 and b00'111'000 >>> 3
             r_m: byte2 and b00'000'111
             if debug? [print-line ["mode " as-integer mode " reg " as-integer reg " r_m " as-integer r_m]]
-            ; print-line ["mode " string/to-hex as-integer mode true " reg " string/to-hex as-integer reg true " r_m " string/to-hex as-integer r_m true] ; hex doesn't work 
             cur: cur + 2
 
             ; Decode reg
             ; TODO: replace reg and refactor function for other data decode
             output-cstr: decode-reg byte2 3 width
-            ; index: (as-integer width) * inst-row-length + reg + 1
-            ; output-cstr: as-c-string inst-reg/index
 
-            ; Decode 
-            switch mode [
-                #"^(03)" [
-                    index: (as-integer width) * inst-row-length + r_m + 1
-                    string/concatenate-literal output-str as-c-string inst-reg/index
-                ]
-                #"^(00)" [
-                    either r_m <> #"^(06)" [
-                        either r_m < #"^(04)" [
-                            string/append-char GET_BUFFER(output-str) as-integer #"["
-                            index: as-integer r_m + 1
-                            string/concatenate-literal output-str as-c-string inst-mem/index
-                            string/append-char GET_BUFFER(output-str) as-integer #"]"
-                        ] [
-                            index: as-integer r_m + 1
-                            string/concatenate-literal output-str as-c-string inst-mem/index
-                        ]
-                    ] [ ; Direct address
-                        string/concatenate-literal output-str integer/form-signed (as-integer cur/1) + ((as-integer cur/2) << 8)
-                        cur: cur + 2
-                    ]
-                ]
-                #"^(01)" [
-                    string/append-char GET_BUFFER(output-str) as-integer #"["
-                    index: as-integer r_m + 1
-                    string/concatenate-literal output-str as-c-string inst-mem/index
-
-                    mem: as-integer cur/1
-                    if mem <> 0 [
-                        string/concatenate-literal output-str " + "
-                        string/concatenate-literal output-str integer/form-signed mem
-                    ]
-                    string/append-char GET_BUFFER(output-str) as-integer #"]"
-                    cur: cur + 1
-                ]
-                #"^(02)" [
-                    string/append-char GET_BUFFER(output-str) as-integer #"["
-                    index: as-integer r_m + 1
-                    string/concatenate-literal output-str as-c-string inst-mem/index
-
-                    mem: (as-integer cur/1) + ((as-integer cur/2) << 8)
-                    if mem <> 0 [
-                        string/concatenate-literal output-str " + "
-                        string/concatenate-literal output-str integer/form-signed mem
-                    ]
-                    string/append-char GET_BUFFER(output-str) as-integer #"]"
-                    cur: cur + 2
-                ]
-            ]
-
+            inc: 0
+            decode-r_m byte2 0 width mode cur :inc decode-str
+            cur: cur + inc
 
             ; Output assembly
             ; Decode direction
             either direction [ ; swap
                 string/concatenate-literal out-asm output-cstr
                 string/concatenate-literal out-asm ", "
-                string/concatenate out-asm output-str -1 0 yes no
+                string/concatenate-literal out-asm decode-str
+                ; string/concatenate out-asm output-str -1 0 yes no
             ] [ ; normal
             
                 ; Op Register/memory to/from register
-                string/concatenate out-asm output-str -1 0 yes no
+                string/concatenate-literal out-asm decode-str
+                ; string/concatenate out-asm output-str -1 0 yes no
                 string/concatenate-literal out-asm ", "
                 string/concatenate-literal out-asm output-cstr
             ]
