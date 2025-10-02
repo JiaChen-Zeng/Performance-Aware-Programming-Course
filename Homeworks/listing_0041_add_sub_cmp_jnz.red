@@ -41,17 +41,6 @@ print-bin: func [
     op-mov-ir: #"^(0B)" ; mov
 
 
-    b000000'10: #"^(02)"
-    b000000'01: #"^(01)"
-
-    b11'000'000: #"^(C0)"
-    b00'111'000: #"^(38)"
-    b00'000'111: #"^(07)"
-
-    b0000'1011: #"^(0B)"
-
-
-
     inst-reg: [
         "al" "cl" "dl" "bl" "ah" "ch" "dh" "bh"
         "ax" "cx" "dx" "bx" "sp" "bp" "si" "di"
@@ -62,21 +51,59 @@ print-bin: func [
         "bx + si" "bx + di" "bp + si" "bp + di" "si" "di" "bp" "bx"
     ]
 
-    extract-bit: func [
-        byte [byte!]
-        pos [integer!] ; Count from the lower bits. 0 based index.
-        return: [logic!]
-    ] [
-        return as-logic (byte and (#"^(01)" << pos))
-    ]
+    decode-str: as-c-string allocate 20
 
-    extract-bits: func [
-        byte [byte!]
-        pos-start [integer!] ; Count from the lower bits. 0 based index.
-        len [integer!]
-        return: [byte!]
+    decode-r_m-t_f-register: func [
+        out-asm [red-string!] op [byte!] p [byte-ptr!]
+        return: [integer!]
+        /local direction [logic!] width [logic!] mode [byte!]
+        byte [byte!] str [c-string!] inc [integer!]
     ] [
-        return byte and (#"^(FF)" >>> (8 - len) << pos-start) >>> pos-start
+        str: switch op [
+            OP_MOV_RM2R ["mov "]
+            OP_ADD_RM2R ["add "]
+            OP_SUB_RM2R ["sub "]
+            OP_CMP_RM2R ["cmp "]
+            default [null]
+        ]
+        if str = null [return 0]
+        string/concatenate-literal out-asm str
+
+        ; Extract byte1
+        byte: p/1
+        width: extract-bit byte 0
+        direction: extract-bit byte 1
+        if debug? [print-line ["direction " direction " width " width]]
+
+        ; Extract byte2
+        byte: p/2
+        mode: decode-mode byte 6
+        if debug? [
+            print-line ["mode " as-integer mode " reg " as-integer extract-bits byte 3 3 " r_m " as-integer extract-bits byte 0 3]
+        ]
+
+        ; Decode reg
+        str: decode-reg byte 3 width
+
+        ; Decode r_m
+        inc: 0
+        decode-r_m byte 0 width mode p + 2 :inc decode-str
+
+        ; Output assembly
+        ; Apply direction
+        either direction [ ; swap
+            string/concatenate-literal out-asm str
+            string/concatenate-literal out-asm ", "
+            string/concatenate-literal out-asm decode-str
+        ] [ ; normal
+            ; Op Register/memory to/from register
+            string/concatenate-literal out-asm decode-str
+            string/concatenate-literal out-asm ", "
+            string/concatenate-literal out-asm str
+        ]
+        string/append-char GET_BUFFER(out-asm) as-integer lf
+
+        return inc + 2
     ]
 
     decode-r_m: func [
@@ -184,7 +211,22 @@ print-bin: func [
         return as-integer p/value
     ]
 
-    decode-str: as-c-string allocate 20
+    extract-bit: func [
+        byte [byte!]
+        pos [integer!] ; Count from the lower bits. 0 based index.
+        return: [logic!]
+    ] [
+        return as-logic (byte and (#"^(01)" << pos))
+    ]
+
+    extract-bits: func [
+        byte [byte!]
+        pos-start [integer!] ; Count from the lower bits. 0 based index.
+        len [integer!]
+        return: [byte!]
+    ] [
+        return byte and (#"^(FF)" >>> (8 - len) << pos-start) >>> pos-start
+    ]
 ]
 
 decode-exe: routine [
@@ -193,9 +235,9 @@ decode-exe: routine [
     /local ser [series!] cur [byte-ptr!] inc [integer!]
     byte1 [byte!] byte2 [byte!]
     
-    direction [logic!] width [logic!] mode [byte!] reg [byte!] r_m [byte!]
-    index [integer!] mem [integer!]
-    output-str [red-string!] output-cstr [c-string!] output-cstr2 [c-string!]
+    direction [logic!] width [logic!] mode [byte!] reg [byte!]
+    index [integer!]
+    output-cstr [c-string!] output-cstr2 [c-string!]
 ] [
     string/concatenate-literal out-asm "bits 16^/"
 
@@ -204,60 +246,9 @@ decode-exe: routine [
     while [cur < as byte-ptr! ser/tail] [
         ; Match 2 bits op
         byte1: cur/1 >>> 2
-        ; Reg/Memory and register to either
-        output-cstr: switch byte1 [
-            OP_MOV_RM2R ["mov "]
-            OP_ADD_RM2R ["add "]
-            OP_SUB_RM2R ["sub "]
-            OP_CMP_RM2R ["cmp "]
-            default [null]
-        ]
-        if output-cstr <> null [
-            string/concatenate-literal out-asm output-cstr
 
-            output-str: string/rs-make-at stack/push* 20
-            ; Extract byte1
-            byte1: cur/1
-            width: extract-bit byte1 0
-            direction: extract-bit byte1 1
-            if debug? [print-line ["direction " direction " width " width]]
-
-            ; Extract byte2
-            byte2: cur/2
-            mode: decode-mode byte2 6
-            ; mode: byte2 and b11'000'000 >>> 6
-            reg: byte2 and b00'111'000 >>> 3
-            r_m: byte2 and b00'000'111
-            if debug? [print-line ["mode " as-integer mode " reg " as-integer reg " r_m " as-integer r_m]]
-            cur: cur + 2
-
-            ; Decode reg
-            ; TODO: replace reg and refactor function for other data decode
-            output-cstr: decode-reg byte2 3 width
-
-            inc: 0
-            decode-r_m byte2 0 width mode cur :inc decode-str
-            cur: cur + inc
-
-            ; Output assembly
-            ; Decode direction
-            either direction [ ; swap
-                string/concatenate-literal out-asm output-cstr
-                string/concatenate-literal out-asm ", "
-                string/concatenate-literal out-asm decode-str
-                ; string/concatenate out-asm output-str -1 0 yes no
-            ] [ ; normal
-            
-                ; Op Register/memory to/from register
-                string/concatenate-literal out-asm decode-str
-                ; string/concatenate out-asm output-str -1 0 yes no
-                string/concatenate-literal out-asm ", "
-                string/concatenate-literal out-asm output-cstr
-            ]
-            string/append-char GET_BUFFER(out-asm) as-integer lf
-
-            continue
-        ]
+        inc: decode-r_m-t_f-register out-asm byte1 cur
+        if 0 < inc [cur: cur + inc continue]
 
         ; Immediate to register/memory 
         if byte1 = OP_ADD_SUB_CMP_IR [
