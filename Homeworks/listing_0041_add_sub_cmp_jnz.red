@@ -38,7 +38,7 @@ print-bin: func [
 
 
     ; Op Immediate to register
-    op-mov-ir: #"^(0B)" ; mov
+    #define OP_MOV_IR #"^(0B)"
 
 
     inst-reg: [
@@ -54,9 +54,10 @@ print-bin: func [
     decode-str: as-c-string allocate 20
 
     decode-r_m-t_f-register: func [
+        "For mov add sub cmp"
         out-asm [red-string!] op [byte!] p [byte-ptr!]
         return: [integer!]
-        /local direction [logic!] width [logic!] mode [byte!]
+        /local direction [logic!] wide [logic!] mode [byte!]
         byte [byte!] str [c-string!] inc [integer!]
     ] [
         str: switch op [
@@ -71,9 +72,9 @@ print-bin: func [
 
         ; Extract byte1
         byte: p/1
-        width: extract-bit byte 0
+        wide: extract-bit byte 0
         direction: extract-bit byte 1
-        if debug? [print-line ["direction " direction " width " width]]
+        if debug? [print-line ["direction " direction " wide " wide]]
 
         ; Extract byte2
         byte: p/2
@@ -83,11 +84,11 @@ print-bin: func [
         ]
 
         ; Decode reg
-        str: decode-reg byte 3 width
+        str: decode-reg byte 3 wide
 
         ; Decode r_m
         inc: 0
-        decode-r_m byte 0 width mode p + 2 :inc decode-str
+        decode-r_m byte 0 wide mode p + 2 :inc decode-str
 
         ; Output assembly
         ; Apply direction
@@ -106,10 +107,87 @@ print-bin: func [
         return inc + 2
     ]
 
+    decode-im-to-r_m: func [
+        "For add sub cmp"
+        out-asm [red-string!] op [byte!] p [byte-ptr!]
+        return: [integer!]
+        /local wide [logic!] signed [logic!] mode [byte!] im [integer!]
+        str [c-string!] inc [integer!] temp[integer!] temp2[integer!]
+    ] [
+        if op <> OP_ADD_SUB_CMP_IR [return 0]
+
+        str: switch extract-bits p/2 3 3 [
+            OP_ADD_SUB_CMP_IR_ADD ["add "]
+            OP_ADD_SUB_CMP_IR_SUB ["sub "]
+            OP_ADD_SUB_CMP_IR_CMP ["cmp "]
+            default [print-line "Unrecognized (decode-im-to-r_m):" return 999999 null]
+        ]
+
+        wide: extract-bit p/1 0
+        signed: extract-bit p/1 1
+        mode: decode-mode p/2 6
+
+        inc: 0
+        decode-r_m p/2 0 wide mode p + 2 :inc decode-str
+
+        inc: inc + 2
+        temp: inc + 1
+        print-line ["wide " wide " signed " signed " " p/inc " " p/temp]
+        either wide and not signed [
+            im: decode-int16 p + inc
+            inc: inc + 2
+        ] [
+            im: decode-int8 p + inc
+            inc: inc + 1
+        ]
+
+        string/concatenate-literal out-asm str
+        string/concatenate-literal out-asm decode-str
+        string/concatenate-literal out-asm ", "
+        string/concatenate-literal out-asm integer/form-signed im
+        string/append-char GET_BUFFER(out-asm) as-integer lf
+
+        return inc
+    ]
+
+    decode-im-to-reg-mov: func [
+        "For mov"
+        out-asm [red-string!] op [byte!] p [byte-ptr!]
+        return: [integer!]
+        /local byte [byte!] wide [logic!] 
+        str [c-string!] str2 [c-string!]
+        inc [integer!]
+    ] [
+        if op <> OP_MOV_IR [return 0]
+
+        ; Extract byte
+        byte: p/1
+        wide: extract-bit byte 3
+        str: decode-reg byte 0 wide
+
+        ; Decode immediate
+        either wide [
+            str2: integer/form-signed decode-int16 p + 1
+            inc: 3
+        ] [
+            str2: integer/form-signed decode-int8 p + 1
+            inc: 2
+        ]
+
+        ; Output assembly
+        string/concatenate-literal out-asm "mov "
+        string/concatenate-literal out-asm str
+        string/concatenate-literal out-asm ", "
+        string/concatenate-literal out-asm str2
+        string/append-char GET_BUFFER(out-asm) as-integer lf
+
+        return inc
+    ]
+
     decode-r_m: func [
         byte [byte!]
         pos-start [integer!] ; Count from the lower bits. 0 based index.
-        width [logic!] mode [byte!]
+        wide [logic!] mode [byte!]
         disp [byte-ptr!] ; Pointer at the 1st byte address of displacement
         out-inc [int-ptr!]
         out-r_m [c-string!] ; Need enough size pre-allocated
@@ -117,7 +195,7 @@ print-bin: func [
     ] [
         switch mode [
             #"^(03)" [
-                copy-memory as byte-ptr! out-r_m as byte-ptr! decode-reg byte pos-start width 2
+                copy-memory as byte-ptr! out-r_m as byte-ptr! decode-reg byte pos-start wide 2
                 r_m-len: 2
                 out-inc/value: 0
             ]
@@ -146,7 +224,7 @@ print-bin: func [
                     out-inc/value: 2
                 ]
             ]
-            default [ ; 1 or 2 only. 
+            #"^(01)" #"^(02)" [
                 r_m: extract-bits byte pos-start 3
                 out-r_m/1: #"["
 
@@ -161,7 +239,7 @@ print-bin: func [
                 ] [
                     int: decode-int16 disp
                     out-inc/value: 2
-                ] ; Exception not handled
+                ]
 
                 either int <> 0 [
                     copy-memory as byte-ptr! (out-r_m + str-len + 1) as byte-ptr! " + " 3
@@ -182,11 +260,11 @@ print-bin: func [
     ]
 
     decode-reg: func [
-        byte [byte!] pos-start [integer!] width [logic!]
+        byte [byte!] pos-start [integer!] wide [logic!]
         return: [c-string!]
         /local index [integer!]
     ] [
-        index: (as-integer width) * inst-row-length + (extract-bits byte pos-start 3) + 1
+        index: (as-integer wide) * inst-row-length + (extract-bits byte pos-start 3) + 1
         return as-c-string inst-reg/index
     ]
 
@@ -211,12 +289,23 @@ print-bin: func [
         return as-integer p/value
     ]
 
+    decode-sint8: func [
+        p [byte-ptr!]
+        return: [integer!]
+    ] [
+        either #"^(00)" < (p/1 and #"^(01)") [
+            return -1 * as-integer p/2
+        ] [
+            return as-integer p/2
+        ]
+    ]
+
     extract-bit: func [
         byte [byte!]
         pos [integer!] ; Count from the lower bits. 0 based index.
         return: [logic!]
     ] [
-        return as-logic (byte and (#"^(01)" << pos))
+        as-logic (byte and (#"^(01)" << pos)) ; `return` causes compiler bug
     ]
 
     extract-bits: func [
@@ -229,13 +318,15 @@ print-bin: func [
     ]
 ]
 
+; ================================================================
+
 decode-exe: routine [
     bin [binary!] out-asm [string!]
 
     /local ser [series!] cur [byte-ptr!] inc [integer!]
     byte1 [byte!] byte2 [byte!]
-    
-    direction [logic!] width [logic!] mode [byte!] reg [byte!]
+
+    direction [logic!] wide [logic!] mode [byte!] reg [byte!]
     index [integer!]
     output-cstr [c-string!] output-cstr2 [c-string!]
 ] [
@@ -249,67 +340,26 @@ decode-exe: routine [
 
         inc: decode-r_m-t_f-register out-asm byte1 cur
         if 0 < inc [cur: cur + inc continue]
-
-        ; Immediate to register/memory 
-        if byte1 = OP_ADD_SUB_CMP_IR [
-            byte2: cur/2 and #"^(1C)" >>> 2
-            output-cstr: switch byte2 [
-                OP_ADD_SUB_CMP_IR_ADD ["add "]
-                OP_ADD_SUB_CMP_IR_SUB ["sub "]
-                OP_ADD_SUB_CMP_IR_CMP ["cmp "]
-                default [null]
-            ]
-            either output-cstr <> null [
-
-                continue
-            ] [
-                print-line "Unrecognized"
-                exit
-            ]
-        ]
+        inc: decode-im-to-r_m out-asm byte1 cur
+        if 0 < inc [cur: cur + inc continue]
 
 
         ; Match 4 bits op
         byte1: cur/1 >>> 4
-        ; Immediate with register/memory
-        if byte1 = op-mov-ir [
-            ; Extract byte1
-            byte1: cur/1
-            width: as-logic byte1 and #"^(08)"
-            reg: byte1 and #"^(07)"
-            cur: cur + 1
 
-            index: (as-integer width) * inst-row-length + reg + 1
-            output-cstr: as-c-string inst-reg/index
+        inc: decode-im-to-reg-mov out-asm byte1 cur
+        if 0 < inc [cur: cur + inc continue]
 
-            ; Decode immediate
-            either width [
-                output-cstr2: integer/form-signed (as-integer cur/1) + ((as-integer cur/2) << 8)
-                cur: cur + 2
-            ] [
-                output-cstr2: integer/form-signed as-integer cur/1
-                cur: cur + 1
-            ]
 
-            ; Output assembly
-            string/concatenate-literal out-asm "mov "
-            string/concatenate-literal out-asm output-cstr
-            string/concatenate-literal out-asm ", "
-            string/concatenate-literal out-asm output-cstr2
-            string/append-char GET_BUFFER(out-asm) as-integer lf
-
-            continue
-        ]
-
-        print-line ["Unrecognized: " as-integer byte1]
+        print-line ["Unrecognized (decode-exe): " as-integer cur/value]
         exit
     ]
 ]
 
 ; ====================================================
 
-bin: read/binary %../computer_enhance/perfaware/part1/listing_0039_more_movs
-; bin: read/binary %../computer_enhance/perfaware/part1/listing_0041_add_sub_cmp_jnz
+; bin: read/binary %../computer_enhance/perfaware/part1/listing_0039_more_movs
+bin: read/binary %../computer_enhance/perfaware/part1/listing_0041_add_sub_cmp_jnz
 print-bin bin
 if debug? [print "====================="]
 
