@@ -1,7 +1,7 @@
 Red []
 
 #system [
-    debug?: true
+    debug?: false
 ]
 
 get-debug?: routine [return: [logic!]] [debug?]
@@ -62,7 +62,7 @@ print-bin: func [
             OP_ADD_RM2R ["add "]
             OP_SUB_RM2R ["sub "]
             OP_CMP_RM2R ["cmp "]
-            default [print-line ["Unrecognized (decode-r_m-t_f-register): " as-integer p/1] return 0 null]
+            default [return 0 null]
         ]
         string/concatenate-literal out-asm str
 
@@ -187,7 +187,7 @@ print-bin: func [
         /local wide [logic!] index [integer!] im [integer!]
         str [c-string!] str2 [c-string!] inc [integer!]
     ] [
-        if (op xor #"^(02)" and #"^(02)") <> #"^(00)" [return 0]
+        if (op xor #"^(02)" and #"^(62)") <> #"^(00)" [return 0]
 
         str: switch extract-bits p/1 3 3 [
             MOP_ADD ["add "]
@@ -216,6 +216,61 @@ print-bin: func [
         string/append-char GET_BUFFER(out-asm) as-integer lf
 
         return inc
+    ]
+
+    decode-jnz: func [
+        out-asm [red-string!] op [byte!] p [byte-ptr!]
+        return: [integer!]
+        /local inst [c-string!]
+    ] [
+        if op <> #"^(07)" [return 0]
+
+        inst: switch extract-bits p/1 0 4 [
+            #"^(04)" ["je "]
+            #"^(0C)" ["jl "]
+            #"^(0E)" ["jle "]
+            #"^(02)" ["jb "]
+            #"^(06)" ["jbe "]
+            #"^(0A)" ["jp "]
+            #"^(00)" ["jo "]
+            #"^(08)" ["js "]
+            #"^(05)" ["jnz "]
+            #"^(0D)" ["jnl "]
+            #"^(0F)" ["jg "]
+            #"^(03)" ["jnb "]
+            #"^(07)" ["ja "]
+            #"^(0B)" ["jnp "]
+            #"^(01)" ["jno "]
+            #"^(09)" ["jns "]
+            default [probe ["Unrecognized (decode-jnz): " p/1] return 0 null]
+        ]
+
+        string/concatenate-literal out-asm inst
+        string/concatenate-literal out-asm integer/form-signed decode-sint8 p + 1
+        string/append-char GET_BUFFER(out-asm) as-integer lf
+
+        return 2
+    ]
+
+    decode-lp: func [
+        out-asm [red-string!] op [byte!] p [byte-ptr!]
+        return: [integer!]
+        /local inst [c-string!]
+    ] [
+        if op <> #"^(38)" [return 0]
+
+        inst: switch extract-bits p/1 0 2 [
+            #"^(02)" ["loop "]
+            #"^(01)" ["loopz "]
+            #"^(00)" ["loopnz "]
+            #"^(03)" ["jcxz "]
+        ]
+
+        string/concatenate-literal out-asm inst
+        string/concatenate-literal out-asm integer/form-signed decode-sint8 p + 1
+        string/append-char GET_BUFFER(out-asm) as-integer lf
+
+        return 2
     ]
 
     decode-r_m: func [
@@ -328,12 +383,11 @@ print-bin: func [
     decode-sint8: func [
         p [byte-ptr!]
         return: [integer!]
+        /local i [integer!]
     ] [
-        either #"^(00)" < (p/1 and #"^(01)") [
-            return -1 * as-integer p/2
-        ] [
-            return as-integer p/2
-        ]
+        i: as-integer p/value
+        if p/value >>> 7 = #"^(01)" [i: (not i) and FFh + 1 * -1]
+        return i
     ]
 
     extract-bit: func [
@@ -360,32 +414,37 @@ decode-exe: routine [
     bin [binary!] out-asm [string!]
 
     /local ser [series!] cur [byte-ptr!] inc [integer!]
-    byte1 [byte!]
+    byte [byte!]
 ] [
     string/concatenate-literal out-asm "bits 16^/"
 
     ser: GET_BUFFER(bin)
     cur: as byte-ptr! ser/offset
     while [cur < as byte-ptr! ser/tail] [
-        ; Match 2 bits op
-        byte1: cur/1 >>> 2
+        ; Match 1 bit op
+        byte: cur/1 >>> 1
 
-        inc: decode-r_m-t_f-register out-asm byte1 cur
+        inc: decode-mem-to-acc out-asm byte cur
         if 0 < inc [cur: cur + inc continue]
-        inc: decode-im-to-r_m out-asm byte1 cur
+
+
+        ; Match 2 bits op
+        byte: cur/1 >>> 2
+
+        inc: decode-r_m-t_f-register out-asm byte cur
+        if 0 < inc [cur: cur + inc continue]
+        inc: decode-im-to-r_m out-asm byte cur
+        if 0 < inc [cur: cur + inc continue]
+        inc: decode-lp out-asm byte cur
         if 0 < inc [cur: cur + inc continue]
 
 
         ; Match 4 bits op
-        byte1: cur/1 >>> 4
+        byte: cur/1 >>> 4
 
-        inc: decode-im-to-reg-mov out-asm byte1 cur
+        inc: decode-im-to-reg-mov out-asm byte cur
         if 0 < inc [cur: cur + inc continue]
-
-        ; Match 1 bit op
-        byte1: cur/1 >>> 1
-
-        inc: decode-mem-to-acc out-asm byte1 cur
+        inc: decode-jnz out-asm byte cur
         if 0 < inc [cur: cur + inc continue]
 
 
@@ -396,7 +455,6 @@ decode-exe: routine [
 
 ; ====================================================
 
-; bin: read/binary %../computer_enhance/perfaware/part1/listing_0039_more_movs
 bin: read/binary %../computer_enhance/perfaware/part1/listing_0041_add_sub_cmp_jnz
 print-bin bin
 if debug? [print "====================="]
