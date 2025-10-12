@@ -63,6 +63,8 @@ print-bin: func [
         0 4 6 2 1 5 7 3
         0 2 4 6 8 10 12 14
     ]
+    regex: context [ip: 0]
+
 
     set-register: func [
         index [integer!] wide [logic!] value [integer!]
@@ -111,6 +113,7 @@ print-bin: func [
 
             i: i + 1
         ]
+        probe ["ip: " (string/to-hex regex/ip true) " (" regex/ip ")"]
     ]
 
     print-flags: func [] [
@@ -614,14 +617,20 @@ print-bin: func [
 decode-exe: routine [
     bin [binary!] out-asm [string!]
 
-    /local ser [series!] cur [byte-ptr!] inc [integer!]
+    /local ser [series!] ser-head [byte-ptr!] ser-tail [byte-ptr!]
+    cur [byte-ptr!] inc [integer!]
     byte [byte!] mask [byte!] fp [decode-fun-ptr!] f [decode-fun!]
 ] [
     string/concatenate-literal out-asm "bits 16^/"
 
     ser: GET_BUFFER(bin)
-    cur: as byte-ptr! ser/offset
-    while [cur < as byte-ptr! ser/tail] [
+    ser-head: as byte-ptr! ser/offset
+    ser-tail: as byte-ptr! ser/tail
+    cur: ser-head
+    while [all [
+        ser-head <= cur
+        cur < ser-tail
+    ]] [
         byte: cur/value
         mask: #"^(FF)"
         while [
@@ -638,6 +647,7 @@ decode-exe: routine [
         if inc <= 0 [probe ["INTERNAL ERROR (decode-exe): " as-integer byte] exit]
 
         cur: cur + inc
+        regex/ip: as-integer cur - as byte-ptr! ser/offset
     ]
 ]
 

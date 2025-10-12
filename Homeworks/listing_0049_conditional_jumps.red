@@ -63,6 +63,8 @@ print-bin: func [
         0 4 6 2 1 5 7 3
         0 2 4 6 8 10 12 14
     ]
+    regex: context [ip: 0]
+
 
     set-register: func [
         index [integer!] wide [logic!] value [integer!]
@@ -111,6 +113,7 @@ print-bin: func [
 
             i: i + 1
         ]
+        probe ["ip: " (string/to-hex regex/ip true) " (" regex/ip ")"]
     ]
 
     print-flags: func [] [
@@ -386,9 +389,10 @@ print-bin: func [
     decode-jnz: func [
         out-asm [red-string!] op [byte!] p [byte-ptr!]
         return: [integer!]
-        /local inst [c-string!]
+        /local inst [c-string!] sop [byte!] v [integer!]
     ] [
-        inst: switch extract-bits p/1 0 4 [
+        sop: extract-bits p/1 0 4
+        inst: switch sop [
             #"^(04)" ["je "]
             #"^(0C)" ["jl "]
             #"^(0E)" ["jle "]
@@ -408,9 +412,18 @@ print-bin: func [
             default [probe ["Unrecognized (decode-jnz): " p/1] return 0 null]
         ]
 
+        v: decode-sint8 p + 1
+
         string/concatenate-literal out-asm inst
-        string/concatenate-literal out-asm integer/form-signed decode-sint8 p + 1
+        string/concatenate-literal out-asm integer/form-signed v
         string/append-char GET_BUFFER(out-asm) as-integer lf
+
+        ; Only sim for jnz
+        if sop = #"^(05)" [
+            unless flags/fzero? [
+                return 2 + v
+            ]
+        ]
 
         return 2
     ]
@@ -614,14 +627,20 @@ print-bin: func [
 decode-exe: routine [
     bin [binary!] out-asm [string!]
 
-    /local ser [series!] cur [byte-ptr!] inc [integer!]
+    /local ser [series!] ser-head [byte-ptr!] ser-tail [byte-ptr!]
+    cur [byte-ptr!] inc [integer!]
     byte [byte!] mask [byte!] fp [decode-fun-ptr!] f [decode-fun!]
 ] [
     string/concatenate-literal out-asm "bits 16^/"
 
     ser: GET_BUFFER(bin)
-    cur: as byte-ptr! ser/offset
-    while [cur < as byte-ptr! ser/tail] [
+    ser-head: as byte-ptr! ser/offset
+    ser-tail: as byte-ptr! ser/tail
+    cur: ser-head
+    while [all [
+        ser-head <= cur
+        cur < ser-tail
+    ]] [
         byte: cur/value
         mask: #"^(FF)"
         while [
@@ -635,9 +654,10 @@ decode-exe: routine [
 
         f: as decode-fun! fp
         inc: f out-asm byte and mask cur
-        if inc <= 0 [probe ["INTERNAL ERROR (decode-exe): " as-integer byte] exit]
+        if zero? inc [probe ["INTERNAL ERROR (decode-exe): " as-integer byte] exit]
 
         cur: cur + inc
+        regex/ip: as-integer cur - as byte-ptr! ser/offset
     ]
 ]
 
@@ -648,9 +668,8 @@ print-extra: routine [] [
 
 ; ====================================================
 
-; bin: read/binary %../computer_enhance/perfaware/part1/listing_0044_register_movs
-bin: read/binary %../computer_enhance/perfaware/part1/listing_0046_add_sub_cmp
-bin: read/binary %../computer_enhance/perfaware/part1/listing_0048_ip_register
+; bin: read/binary %../computer_enhance/perfaware/part1/listing_0048_ip_register
+bin: read/binary %../computer_enhance/perfaware/part1/listing_0049_conditional_jumps
 print-bin bin
 if debug? [print "====================="]
 
